@@ -12,7 +12,10 @@ Then open the localhost URL shown in your terminal (usually http://localhost:786
 but check your terminal — the port may differ).
 """
 
-import gradio as gr
+try:
+    import gradio as gr
+except ImportError:  # pragma: no cover - depends on local environment
+    gr = None
 
 from agent import run_agent
 from utils.data_loader import get_example_wardrobe, get_empty_wardrobe
@@ -43,8 +46,41 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
            string and return it along with session["outfit_suggestion"] and
            session["fit_card"].
     """
-    # TODO: implement this function
-    return "Agent not yet implemented.", "", ""
+    if not user_query or not user_query.strip():
+        return "Please enter a search query first.", "", ""
+
+    if wardrobe_choice == "Empty wardrobe (new user)":
+        wardrobe = get_empty_wardrobe()
+    else:
+        wardrobe = get_example_wardrobe()
+
+    session = run_agent(user_query.strip(), wardrobe)
+    if session["error"]:
+        return session["error"], "", ""
+
+    selected_item = session["selected_item"]
+    listing_lines = [
+        selected_item["title"],
+        f"Price: ${selected_item['price']:.2f} on {selected_item['platform']}",
+        f"Size: {selected_item['size']} | Condition: {selected_item['condition']}",
+        f"Category: {selected_item['category']}",
+        f"Colors: {', '.join(selected_item['colors'])}",
+        f"Style tags: {', '.join(selected_item['style_tags'])}",
+        "",
+        selected_item["description"],
+    ]
+    if session["parsed"].get("filters_relaxed"):
+        listing_lines.insert(
+            0,
+            "No exact size/price match found, so this is the closest style match:",
+        )
+
+    listing_text = "\n".join(listing_lines)
+    return (
+        listing_text,
+        session["outfit_suggestion"] or "",
+        session["fit_card"] or "",
+    )
 
 
 # ── interface ─────────────────────────────────────────────────────────────────
@@ -58,6 +94,11 @@ EXAMPLE_QUERIES = [
 ]
 
 def build_interface():
+    if gr is None:
+        raise ImportError(
+            "gradio is not installed. Run `pip install -r requirements.txt` first."
+        )
+
     with gr.Blocks(title="FitFindr") as demo:
         gr.Markdown("""
 # FitFindr 🛍️

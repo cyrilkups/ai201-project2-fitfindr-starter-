@@ -18,6 +18,9 @@ Usage (once implemented):
     print(result["error"])   # None on success
 """
 
+import re
+from typing import Optional
+
 from tools import search_listings, suggest_outfit, create_fit_card
 
 
@@ -46,6 +49,85 @@ def _new_session(query: str, wardrobe: dict) -> dict:
 
 
 # ── planning loop ─────────────────────────────────────────────────────────────
+
+_PRICE_PATTERN = re.compile(
+    r"(?:under|below|less than|max(?:imum)?(?: of)?)\s*\$?(\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_FALLBACK_PRICE_PATTERN = re.compile(r"\$(\d+(?:\.\d+)?)")
+_SIZE_PATTERNS = [
+    re.compile(
+        r"\bsize\s*((?:xxs|xs|s|m|l|xl|xxl)|(?:us\s*)?\d+(?:\.\d+)?|w\d+(?:\s*l\d+)?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bin\s+((?:xxs|xs|s|m|l|xl|xxl)|(?:us\s*)?\d+(?:\.\d+)?|w\d+(?:\s*l\d+)?)\s+size\b",
+        re.IGNORECASE,
+    ),
+]
+_FILLER_PATTERN = re.compile(
+    r"\b(i(?:'| a)?m looking for|looking for|find me|show me|need|want|please|something like)\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_size(size_text: Optional[str]) -> Optional[str]:
+    """Normalize extracted size text into the formats used in the dataset."""
+    if not size_text:
+        return None
+
+    cleaned = " ".join(size_text.strip().upper().split())
+    if cleaned in {"XXS", "XS", "S", "M", "L", "XL", "XXL"}:
+        return cleaned
+
+    numeric = re.fullmatch(r"(?:US\s*)?(\d+(?:\.\d+)?)", cleaned)
+    if numeric:
+        return numeric.group(1)
+
+    return cleaned
+
+
+def _extract_max_price(query: str) -> Optional[float]:
+    """Parse a user-provided budget like 'under $30'."""
+    match = _PRICE_PATTERN.search(query)
+    if not match:
+        match = _FALLBACK_PRICE_PATTERN.search(query)
+    return float(match.group(1)) if match else None
+
+
+def _extract_size(query: str) -> Optional[str]:
+    """Parse simple apparel and shoe size phrases from the query."""
+    for pattern in _SIZE_PATTERNS:
+        match = pattern.search(query)
+        if match:
+            return _normalize_size(match.group(1))
+    return None
+
+
+def _extract_description(query: str) -> str:
+    """Remove common filters and filler words to isolate the item request."""
+    cleaned = re.split(r"[.!?]", query, maxsplit=1)[0]
+    cleaned = _PRICE_PATTERN.sub(" ", cleaned)
+    cleaned = _FALLBACK_PRICE_PATTERN.sub(" ", cleaned)
+    for pattern in _SIZE_PATTERNS:
+        cleaned = pattern.sub(" ", cleaned)
+
+    cleaned = _FILLER_PATTERN.sub(" ", cleaned)
+    cleaned = re.sub(r"\b(with|for|in)\b\s*$", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"[\s,;/\-]+", " ", cleaned)
+    cleaned = cleaned.strip()
+    return cleaned or query.strip()
+
+
+def _parse_query(query: str) -> dict:
+    """Extract the search description and optional filters from the query."""
+    return {
+        "description": _extract_description(query),
+        "size": _extract_size(query),
+        "max_price": _extract_max_price(query),
+        "filters_relaxed": False,
+    }
+
 
 def run_agent(query: str, wardrobe: dict) -> dict:
     """
@@ -92,9 +174,47 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     Before writing code, complete the Planning Loop and State Management sections
     of planning.md — your implementation should match what you described there.
     """
-    # TODO: implement the planning loop
     session = _new_session(query, wardrobe)
-    session["error"] = "Planning loop not yet implemented."
+
+    if not query or not query.strip():
+        session["error"] = "Please enter what you're looking for."
+        return session
+
+    parsed = _parse_query(query)
+    session["parsed"] = parsed
+
+    results = search_listings(
+        parsed["description"],
+        size=parsed["size"],
+        max_price=parsed["max_price"],
+    )
+
+    if not results and (parsed["size"] is not None or parsed["max_price"] is not None):
+        results = search_listings(parsed["description"])
+        if results:
+            parsed["filters_relaxed"] = True
+
+    session["search_results"] = results
+    if not results:
+        filters = []
+        if parsed["size"]:
+            filters.append(f"size {parsed['size']}")
+        if parsed["max_price"] is not None:
+            filters.append(f"under ${parsed['max_price']:.0f}")
+
+        filter_text = f" with {' and '.join(filters)}" if filters else ""
+        session["error"] = (
+            f"No listings found for '{parsed['description']}'{filter_text}. "
+            "Try a broader style keyword or remove a filter."
+        )
+        return session
+
+    session["selected_item"] = results[0]
+    session["outfit_suggestion"] = suggest_outfit(session["selected_item"], wardrobe)
+    session["fit_card"] = create_fit_card(
+        session["outfit_suggestion"],
+        session["selected_item"],
+    )
     return session
 
 
