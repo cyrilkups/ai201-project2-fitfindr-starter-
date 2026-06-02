@@ -1,0 +1,61 @@
+Milestone 5 Failure Checks
+==========================
+
+Generated on 2026-06-01 in the project venv.
+
+Note:
+- In shell commands passed through `python -c "..."`, dollar amounts like `$5`
+  must be escaped as `\$5`, or the shell will remove them before Python sees
+  the query.
+
+
+1. search_listings returns zero results without crashing
+--------------------------------------------------------
+
+Command:
+./.venv/bin/python -c "from tools import search_listings; print(search_listings('designer ballgown', size='XXS', max_price=5))"
+
+Output:
+[]
+
+
+2. Full agent no-results path returns a helpful error and stops early
+---------------------------------------------------------------------
+
+Command:
+./.venv/bin/python -c "from agent import run_agent; from utils.data_loader import get_example_wardrobe; session = run_agent('designer ballgown size XXS under \$5', get_example_wardrobe()); print(session['error']); print('fit_card=', session['fit_card']); print('selected_item=', session['selected_item'])"
+
+Output:
+No listings found for 'designer ballgown' with size XXS and under $5. Try a broader style keyword or remove a filter.
+fit_card= None
+selected_item= None
+
+
+3. suggest_outfit handles an empty wardrobe gracefully
+------------------------------------------------------
+
+Command:
+./.venv/bin/python -c "from tools import search_listings, suggest_outfit; from utils.data_loader import get_empty_wardrobe; results = search_listings('vintage graphic tee', size=None, max_price=50); print(suggest_outfit(results[0], get_empty_wardrobe()))"
+
+Output:
+Use Graphic Tee — 2003 Tour Bootleg Style as the focal point and ground it with relaxed denim or straight-leg trousers in a neutral wash. Add clean sneakers or chunky boots so the black palette still feels balanced and graphic tee, vintage.
+
+
+4. create_fit_card handles an empty outfit string gracefully
+------------------------------------------------------------
+
+Command:
+./.venv/bin/python -c "from tools import search_listings, create_fit_card; results = search_listings('vintage graphic tee', size=None, max_price=50); print(create_fit_card('', results[0]))"
+
+Output:
+I couldn't generate a full fit card because the outfit details were missing. Graphic Tee — 2003 Tour Bootleg Style is still a strong secondhand pickup on its own.
+
+
+5. Regression check
+-------------------
+
+Command:
+./.venv/bin/python -m pytest tests/ -q
+
+Output:
+15 passed in 11.08s

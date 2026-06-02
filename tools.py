@@ -476,7 +476,10 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
     """
     if not outfit or not outfit.strip():
         title = new_item.get("title", "New find")
-        return f"{title} is a strong secondhand pickup even before the rest of the outfit comes together."
+        return (
+            f"I couldn't generate a full fit card because the outfit details were "
+            f"missing. {title} is still a strong secondhand pickup on its own."
+        )
 
     prompt = f"""Write a short, authentic Instagram/TikTok caption (2–4 sentences) for this outfit. Sound like a real person posting their OOTD, not a robot or brand account.
 
