@@ -1,8 +1,10 @@
 # FitFindr
 
-FitFindr is a small styling agent for secondhand fashion. A user describes what they want in natural language, FitFindr searches a mock listings dataset, chooses the best match, suggests how to style it with the user's wardrobe, and then generates a short social-ready fit card caption.
+FitFindr is a small agent for secondhand fashion discovery. You give it a plain-English shopping request like "vintage graphic tee under $30," and it does three things in sequence: it searches a resale listings dataset, figures out how that item could work with your wardrobe, and then writes a short fit-card caption that sounds like a real thrift post instead of a product blurb.
 
-## Run
+What makes the project interesting is not just the three tools by themselves, but the decision-making between them. The agent does not blindly call every tool every time. It searches first, checks whether the search succeeded, optionally relaxes the filters once, and only then moves on to styling and caption generation.
+
+## Quick Start
 
 ### Setup
 
@@ -18,104 +20,132 @@ Create a `.env` file in the project root:
 GROQ_API_KEY=your_key_here
 ```
 
-### Launch the app
+### Run the app
 
-Default Gradio ports may already be busy on some machines. In my local verification, the interface was confirmed at `http://127.0.0.1:8080`.
+On this machine, the default Gradio port range was already busy, so I verified the app on port `8080`:
 
 ```bash
 GRADIO_SERVER_PORT=8080 python app.py
 ```
 
-### Run tests
+Then open:
+
+`http://127.0.0.1:8080`
+
+### Run the tests
 
 ```bash
 python -m pytest tests/ -q
 ```
 
+## What a Successful Run Looks Like
+
+A typical successful interaction goes like this:
+
+1. The user asks for something in natural language.
+2. The agent parses that request into a search description plus optional filters like size and max price.
+3. `search_listings()` returns ranked matches from the dataset.
+4. The top result becomes `session["selected_item"]`.
+5. `suggest_outfit()` uses that exact item plus the wardrobe data to produce styling advice.
+6. `create_fit_card()` turns that exact outfit suggestion into a short caption.
+7. The UI shows all three outputs together: listing, outfit idea, and fit card.
+
+If search fails, the sequence changes. The agent tries one relaxed search when the original request included filters. If that still comes back empty, the run stops there with a helpful error instead of pretending it found something.
+
 ## Tool Inventory
 
 ### `search_listings(description: str, size: Optional[str], max_price: Optional[float]) -> list[dict]`
 
-Purpose:
-Find secondhand listings that match the user's request and rank them by relevance.
+This tool is the retrieval step. Its job is to take a user request and turn it into actual candidate items from the dataset.
 
 Inputs:
-- `description: str` — the search phrase, such as `"vintage graphic tee"` or `"90s track jacket"`.
-- `size: Optional[str]` — optional apparel, shoe, or waist size such as `"M"`, `"8"`, or `"W30 L30"`.
-- `max_price: Optional[float]` — optional maximum price in USD.
+- `description: str` — the core search phrase, such as `"vintage graphic tee"` or `"90s track jacket"`.
+- `size: Optional[str]` — an optional size filter such as `"M"`, `"8"`, or `"W30 L30"`.
+- `max_price: Optional[float]` — an optional maximum budget in dollars.
 
 Output:
-- `list[dict]` of ranked listing objects. Each listing includes `id`, `title`, `description`, `category`, `style_tags`, `size`, `condition`, `price`, `colors`, `brand`, and `platform`.
+- a ranked `list[dict]` of listings, where each listing contains `id`, `title`, `description`, `category`, `style_tags`, `size`, `condition`, `price`, `colors`, `brand`, and `platform`.
 
-Failure behavior:
-- Returns `[]` if nothing matches. It does not raise an exception for normal no-results cases.
+What it contributes:
+- it gives the rest of the agent something concrete to reason over
+- it determines whether the run continues normally, retries with relaxed filters, or exits early
+
+Failure handling:
+- when nothing matches, it returns `[]`
+- it does not throw a normal "no results" case as an exception
 
 ### `suggest_outfit(new_item: dict, wardrobe: dict) -> str`
 
-Purpose:
-Suggest an outfit that uses the chosen listing and the user's current wardrobe.
+This is the styling step. It takes the chosen item and tries to make it feel wearable in the context of the user's wardrobe instead of treating it like a standalone product.
 
 Inputs:
-- `new_item: dict` — the selected listing returned from `search_listings`.
-- `wardrobe: dict` — wardrobe data with an `items` list from `utils/data_loader.py`.
+- `new_item: dict` — the selected listing chosen from search results
+- `wardrobe: dict` — wardrobe data with an `items` list loaded from `utils/data_loader.py`
 
 Output:
-- `str` containing outfit advice. In the happy path, it references named wardrobe pieces. In the fallback path, it gives general styling guidance.
+- a non-empty string with outfit advice
 
-Failure behavior:
-- If the wardrobe is empty, it returns general styling advice instead of crashing.
-- If the Groq call fails, it falls back to deterministic styling text.
+What it contributes:
+- turns a search result into something personal
+- references actual wardrobe pieces when possible
+- falls back to general styling guidance when the wardrobe is empty
+
+Failure handling:
+- if the wardrobe is empty, it still returns usable advice
+- if the Groq call fails, it falls back to deterministic styling text
 
 ### `create_fit_card(outfit: str, new_item: dict) -> str`
 
-Purpose:
-Turn the outfit suggestion into a short caption that sounds like a real thrift or outfit post.
+This is the finishing step. It takes the item plus the styling recommendation and turns them into a short caption that feels like something a person would actually post.
 
 Inputs:
-- `outfit: str` — the outfit suggestion returned by `suggest_outfit`.
-- `new_item: dict` — the selected listing.
+- `outfit: str` — the outfit text returned by `suggest_outfit`
+- `new_item: dict` — the same selected listing used in the previous step
 
 Output:
-- `str` caption that mentions the item, price, platform, and vibe.
+- a non-empty caption string that mentions the item, price, platform, and overall vibe
 
-Failure behavior:
-- If `outfit` is empty, it returns a descriptive fallback string.
-- If the Groq call fails, it falls back to a deterministic caption.
+What it contributes:
+- makes the final output feel complete and presentable
+- gives the interface a third panel that reads differently from the outfit advice
 
-## Planning Loop
+Failure handling:
+- if the outfit string is missing, it returns a descriptive fallback message
+- if the Groq call fails, it falls back to a deterministic caption
 
-The planning loop lives in [agent.py](/Users/cyrilkups/Desktop/ai201-project2-fitfindr-starter-/agent.py) inside `run_agent()`. It is not just a fixed “call every tool” pipeline; it makes one important branching decision based on the search result.
+## How the Planning Loop Actually Works
 
-Step-by-step behavior:
-1. Create a fresh `session` dict for this user interaction.
-2. Reject empty queries early with `session["error"] = "Please enter what you're looking for."`.
+The planning loop lives in [agent.py](/Users/cyrilkups/Desktop/ai201-project2-fitfindr-starter-/agent.py) inside `run_agent()`. The key idea is that it branches on the search result instead of treating the system like a fixed pipeline.
+
+The logic is:
+
+1. Start a fresh `session` dictionary.
+2. Reject empty user input immediately.
 3. Parse the raw query into:
    - `description`
    - `size`
    - `max_price`
    - `filters_relaxed`
 4. Call `search_listings(description, size, max_price)`.
-5. If search returns results:
-   - store them in `session["search_results"]`
-   - set `session["selected_item"] = results[0]`
-   - call `suggest_outfit(selected_item, wardrobe)`
-   - store the result in `session["outfit_suggestion"]`
-   - call `create_fit_card(outfit_suggestion, selected_item)`
-   - store the result in `session["fit_card"]`
-6. If search returns `[]` and the query included a size or price filter:
-   - retry once with relaxed filters by calling `search_listings(description)` only
-   - if retry succeeds, set `filters_relaxed = True` and continue through the normal success path
-7. If search still returns `[]` after the retry:
+5. If search succeeds:
+   - store the results
+   - choose `results[0]` as `selected_item`
+   - pass that exact object into `suggest_outfit`
+   - pass the exact resulting outfit string into `create_fit_card`
+6. If search fails and the query had filters:
+   - retry once using only the description
+   - mark `filters_relaxed = True` if that retry succeeds
+7. If search still fails:
    - set `session["error"]`
-   - return immediately
-   - do not call `suggest_outfit`
-   - do not call `create_fit_card`
+   - return early
+   - do not call the styling tool
+   - do not call the caption tool
 
-This branching behavior is covered by tests in [tests/test_agent.py](/Users/cyrilkups/Desktop/ai201-project2-fitfindr-starter-/tests/test_agent.py).
+That early-stop behavior is important. It is what makes the agent feel deliberate instead of scripted.
 
 ## State Management
 
-The state object is a single session dictionary passed through the whole interaction:
+Everything flows through a single session object. That makes the interaction easy to inspect and easy to test.
 
 ```python
 session = {
@@ -135,118 +165,127 @@ session = {
 }
 ```
 
-Why this matters:
-- `selected_item` is the exact listing dict passed into both downstream tools.
-- `outfit_suggestion` is the exact string passed into `create_fit_card`.
-- the UI only reads the final session; it does not recompute any intermediate values.
+Why this works well:
+- the selected listing is stored once and reused downstream
+- the outfit text is stored once and reused downstream
+- the UI only reads the final state instead of recomputing anything
+- failure is explicit because `error` is part of the same object
 
-I verified this directly and then encoded it in tests that assert:
-- the same `selected_item` object reaches both `suggest_outfit` and `create_fit_card`
-- the exact `outfit_suggestion` stored in session is the same string passed into `create_fit_card`
+I also tested this directly. The same `selected_item` object reaches both downstream tools, and the exact `outfit_suggestion` stored in session is the string that becomes the input to `create_fit_card`.
 
 ## Error Handling
 
-### `search_listings`
+### Search failure
 
-Concrete failure:
-- Query: `"designer ballgown size XXS under $5"`
+Concrete example:
+- query: `"designer ballgown size XXS under $5"`
 
 Direct tool result:
-- `[]`
+- `search_listings(...)` returns `[]`
 
-Agent behavior:
-- returns `"No listings found for 'designer ballgown' with size XXS and under $5. Try a broader style keyword or remove a filter."`
-- leaves `selected_item = None`
-- leaves `fit_card = None`
-- never calls downstream tools
+Agent response:
+- `"No listings found for 'designer ballgown' with size XXS and under $5. Try a broader style keyword or remove a filter."`
 
-### `suggest_outfit`
+State at the end:
+- `selected_item = None`
+- `outfit_suggestion = None`
+- `fit_card = None`
 
-Concrete failure:
-- same listing as happy path, but with `get_empty_wardrobe()`
+The important part is what does not happen: the agent does not continue into styling or caption generation.
 
-Behavior:
-- returns general advice such as using relaxed denim or straight-leg trousers and simple shoes
-- does not raise an exception
-- still gives the agent something usable for the next step
+### Empty wardrobe
 
-### `create_fit_card`
+Concrete example:
+- call `suggest_outfit(listing, get_empty_wardrobe())`
 
-Concrete failure:
-- `create_fit_card("", listing)`
+Response shape:
+- general styling guidance such as pairing the item with relaxed denim, neutral bottoms, or simple shoes
 
-Behavior:
-- returns: `"I couldn't generate a full fit card because the outfit details were missing. ..."`
-- does not raise an exception
-- gives the UI a specific fallback message
+Why that matters:
+- the agent still returns something useful even when it cannot reference named wardrobe pieces
 
-I saved a transcript of these deliberate failure checks in [milestone5_failure_checks.txt](/Users/cyrilkups/Desktop/ai201-project2-fitfindr-starter-/milestone5_failure_checks.txt).
+### Empty outfit string
+
+Concrete example:
+- call `create_fit_card("", listing)`
+
+Response:
+- `"I couldn't generate a full fit card because the outfit details were missing..."`
+
+Why that matters:
+- the UI receives a readable fallback instead of a traceback or silent empty output
+
+I saved the deliberate failure-mode transcript in [milestone5_failure_checks.txt](/Users/cyrilkups/Desktop/ai201-project2-fitfindr-starter-/milestone5_failure_checks.txt).
 
 ## AI Usage
 
-### Instance 1: Tool implementation
+I used AI as a drafting and acceleration tool, but not as something I trusted blindly.
 
-Input I gave the AI:
-- the `Tool 1`, `Tool 2`, and `Tool 3` spec blocks from `planning.md`
-- expected failure behaviors
-- the exact function signatures already present in `tools.py`
+### Example 1: Tool implementation
 
-What the AI produced:
-- first-pass implementations for search, styling, and caption generation
+What I gave the AI:
+- the `Tool 1`, `Tool 2`, and `Tool 3` sections from `planning.md`
+- the intended failure behaviors
+- the existing function signatures from `tools.py`
+
+What it gave back:
+- first-pass implementations for retrieval, styling, and caption generation
 
 What I changed before keeping it:
-- made imports resilient when `groq` or `dotenv` were missing
-- added deterministic fallbacks for `suggest_outfit` and `create_fit_card`
-- corrected compatibility issues with the actual Groq Python client shape
-- refined size parsing and ranking logic to better fit the mock dataset
+- made imports safe when `groq` or `dotenv` were missing
+- added deterministic fallbacks for both LLM-backed tools
+- corrected SDK assumptions so the Groq client calls matched the real client
+- refined ranking and size-matching logic to better fit this dataset
 
-### Instance 2: Planning loop and state flow
+### Example 2: Planning loop and state flow
 
-Input I gave the AI:
+What I gave the AI:
 - the `Planning Loop`, `State Management`, and `Architecture` sections from `planning.md`
-- the Mermaid diagram showing the retry branch and early-stop error path
+- the Mermaid diagram showing the retry branch and early-stop branch
 
-What the AI produced:
-- a draft `run_agent()` flow
+What it gave back:
+- a draft `run_agent()` structure
 
 What I changed before keeping it:
-- made the retry logic conditional only on filtered searches
-- ensured the no-results branch returns before `suggest_outfit` and `create_fit_card`
-- added tests that verify object identity and state passing rather than only checking string outputs
+- made retry conditional only when size or price filters were present
+- ensured the no-results path returns before any downstream tool calls
+- added tests that verify actual state passing, not just surface-level output
 
 ## Spec Reflection
 
-The biggest thing that changed from the original plan was environment handling. The tool and planning logic matched the design closely, but the runtime environment needed extra work:
-- `gradio>=6.9.0` was not compatible with the repo’s Python 3.9 venv
-- Gradio 4.44.1 worked, but it also needed a compatible `huggingface_hub` pin
-- default Gradio ports were busy locally, so I verified the app at `http://127.0.0.1:8080`
+The implementation stayed pretty close to the original plan, which was a good sign that the spec was specific enough. The biggest surprises were environmental rather than architectural.
 
-The planning loop itself stayed close to the spec:
+What changed in practice:
+- the original Gradio requirement was too new for the Python 3.9 venv in this repo
+- Gradio also needed a compatible `huggingface_hub` version to import cleanly
+- local port conflicts meant I verified the interface on `http://127.0.0.1:8080` instead of assuming `7860`
+
+What stayed true to the plan:
 - one real decision point after search
-- one retry path
-- early termination when search cannot recover
+- one relaxed retry path
+- one explicit early-stop path on repeated search failure
+- session-based state flow across every step
 
-If I extended this project, I would improve query parsing so that terms like `"a vintage graphic tee"` normalize a little more cleanly and I would separate “closest style match” from “closest size match” more explicitly in the ranking.
+If I kept going, I would improve the query parsing and make the "closest match" ranking a little more nuanced so that the fallback search could distinguish style similarity from size similarity more gracefully.
 
 ## End-to-End Verification
 
 Verified locally:
-- `handle_query("vintage graphic tee under $30", "Example wardrobe")` populates all three output panels
-- `handle_query("designer ballgown size XXS under $5", "Example wardrobe")` returns an error only in the first output panel
-- `python app.py` launches successfully when run with `GRADIO_SERVER_PORT=8080`
-- local server responds with HTTP 200 at `http://127.0.0.1:8080`
+- `handle_query("vintage graphic tee under $30", "Example wardrobe")` fills all three output panels
+- `handle_query("designer ballgown size XXS under $5", "Example wardrobe")` returns an error only in the first panel
+- `build_interface()` succeeds
+- the app launches successfully with `GRADIO_SERVER_PORT=8080 python app.py`
+- `http://127.0.0.1:8080` responds with HTTP 200
 - `python -m pytest tests/ -q` passes
 
 ## Demo Notes
 
-Suggested happy-path demo:
-1. Query: `"vintage graphic tee under $30"`
-2. Narrate that the agent parses the query, searches listings, chooses one top result, styles it with wardrobe state, then writes the fit card.
-3. Point out that the listing in panel 1 is the same item being used for the outfit and caption.
+If you want to demo the project smoothly, the cleanest path is:
 
-Suggested failure-path demo:
-1. Query: `"designer ballgown size XXS under $5"`
-2. Narrate that search fails, the agent stops early, and the styling/caption steps are intentionally skipped.
+1. Start the app.
+2. Run a happy-path query like `"vintage graphic tee under $30"`.
+3. Explain that the selected listing becomes shared state for the next two steps.
+4. Run a failure query like `"designer ballgown size XXS under $5"`.
+5. Point out that the agent stops early instead of fabricating a recommendation.
 
-Suggested state-passing narration:
-- “This selected item dict is stored in `session['selected_item']`, then the same object is passed to `suggest_outfit`, and the exact returned outfit string becomes the input to `create_fit_card`.”
+There is also a ready-to-use recording outline in [demo_script.md](/Users/cyrilkups/Desktop/ai201-project2-fitfindr-starter-/demo_script.md).

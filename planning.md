@@ -12,7 +12,7 @@
 **User query:** "I'm looking for a vintage graphic tee under $30, size M. I mostly wear baggy jeans and chunky sneakers."
 
 **What FitFindr does:**
-FitFindr parses the natural language query into structured search parameters, then runs a two-pass search. First it tries the exact request: `description="vintage graphic tee"`, `size="M"`, `max_price=30.0`. If that exact search is empty, it tells the user it is relaxing the filters and retries using only the description. Once it has a non-empty result list, it selects the top item, generates an outfit suggestion using the user's wardrobe, and then generates a short fit-card caption. If both searches are empty, it sets `session["error"]` and stops immediately without calling the styling or caption tools.
+FitFindr takes the user's plain-English request and turns it into a structured search. It first tries the exact ask: `description="vintage graphic tee"`, `size="M"`, `max_price=30.0`. If that search comes back empty, it broadens the request once by removing the filters and searching again with just the description. As soon as it has a real match, it treats that listing as the anchor for the rest of the run: the styling tool builds an outfit around it using the wardrobe, and the fit-card tool turns that result into a short caption. If both searches fail, the agent stops cleanly and returns a helpful error instead of pretending it found something.
 
 **Data flow:**
 1. Query → Parse → `search_listings("vintage graphic tee", size="M", max_price=30.0)` → Returns `[]`
@@ -32,7 +32,7 @@ You must have at least 3 tools. The three required tools are listed — add any 
 ### Tool 1: search_listings
 
 **What it does:**
-Searches the mock listings dataset (40 items) for secondhand clothing that matches the user's description, size, and price constraints. Returns the best-matching items ranked by relevance.
+Searches the mock listings dataset for secondhand pieces that feel close to what the user asked for. It uses the description as the main signal, applies size and budget filters when present, and returns the strongest matches first.
 
 **Input parameters:**
 - `description` (str): Keywords describing what to search for (for example `"vintage graphic tee"`, `"90s track jacket"`, `"black combat boots"`). Required.
@@ -61,7 +61,7 @@ If no listings pass the filters or no listing has any keyword overlap with the d
 ### Tool 2: suggest_outfit
 
 **What it does:**
-Given a new item and the user's existing wardrobe, suggests one or more complete outfit combinations. Uses an LLM to reason about style compatibility, color coordination, and occasion suitability.
+Takes the selected listing and helps the user imagine how to wear it. The tool uses an LLM to connect the new item to the wardrobe in a way that feels specific, wearable, and stylistically coherent.
 
 **Input parameters:**
 - `new_item` (dict): The listing dictionary of the item found by search_listings (contains title, colors, category, style_tags, etc.).
@@ -78,7 +78,7 @@ If the wardrobe is empty, the tool should return general styling advice built ar
 ### Tool 3: create_fit_card
 
 **What it does:**
-Generates a short, shareable Instagram-style caption for a complete outfit. The caption should sound natural and appealing — the kind of thing someone would actually post on social media, not a product description.
+Generates a short, shareable caption for the outfit. The goal is for it to sound like something a real person would post after a good thrift find, not like store copy.
 
 **Input parameters:**
 - `outfit` (str): The outfit suggestion string from `suggest_outfit` (describes the items and why they work together).
@@ -101,7 +101,7 @@ No additional tools are required for the baseline agent. Query parsing happens i
 
 **How does your agent decide which tool to call next?**
 
-The planning loop is a fixed sequence with one conditional retry branch:
+The planning loop is mostly linear, but it has one meaningful branch after search:
 
 1. Create a fresh `session` dict with keys for the raw query, parsed filters, search results, selected item, wardrobe, outfit suggestion, fit card, and error.
 2. If `query.strip()` is empty, set `session["error"] = "Please enter what you're looking for."` and return immediately.
@@ -126,7 +126,7 @@ The planning loop is a fixed sequence with one conditional retry branch:
 
 **How does information from one tool get passed to the next?**
 
-All state lives in one mutable `session` dictionary created at the top of `run_agent()`. Tools do not read global state; they receive the exact values they need from `session`, and their outputs are written back into `session` for the next step to use.
+All state lives in one mutable `session` dictionary created at the top of `run_agent()`. Nothing important is hidden off to the side. Each tool gets exactly what it needs from the session and writes its result back into that same shared object, which keeps the flow easy to inspect and easy to debug.
 
 ```python
 session = {
@@ -218,9 +218,9 @@ graph TD
 **Flow summary:**
 1. User query and wardrobe enter `run_agent()`.
 2. `run_agent()` creates `session`, parses the query, and calls `search_listings`.
-3. A visible early-stop branch handles empty search results after the relaxed retry.
-4. Success path stores `selected_item` in session, then calls `suggest_outfit`.
-5. The resulting outfit text is written back to session and passed to `create_fit_card`.
+3. If search cannot recover even after the relaxed retry, the run ends there with an error.
+4. If search succeeds, the chosen listing is stored in session and passed to `suggest_outfit`.
+5. The outfit text is written back to session and then passed straight into `create_fit_card`.
 6. The completed session is returned to the UI.
 
 ---
