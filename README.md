@@ -215,7 +215,7 @@ Response:
 Why that matters:
 - the UI receives a readable fallback instead of a traceback or silent empty output
 
-I saved the deliberate failure-mode transcript in [milestone5_failure_checks.txt](/Users/cyrilkups/Desktop/ai201-project2-fitfindr-starter-/milestone5_failure_checks.txt).
+I saved the deliberate failure-mode transcript in [milestone5_failure_checks.txt](/Users/cyrilkups/Desktop/ai201-project2-fitfindr-starter-/milestone5_failure_checks.txt) and a rendered screenshot artifact in [milestone5_failure_screenshot.html.png](/Users/cyrilkups/Desktop/ai201-project2-fitfindr-starter-/milestone5_failure_screenshot.html.png).
 
 ## AI Usage
 

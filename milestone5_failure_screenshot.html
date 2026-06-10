@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>FitFindr Milestone 5 Failure Check</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 40px;
+      background: #f4f1ea;
+      color: #1f2933;
+      font-family: Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    .frame {
+      max-width: 1100px;
+      margin: 0 auto;
+      background: #111827;
+      color: #e5e7eb;
+      border-radius: 18px;
+      box-shadow: 0 24px 60px rgba(17, 24, 39, 0.25);
+      overflow: hidden;
+    }
+
+    .bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 22px;
+      background: #1f2937;
+      border-bottom: 1px solid rgba(229, 231, 235, 0.12);
+      font-size: 15px;
+    }
+
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .red { background: #f87171; }
+    .yellow { background: #fbbf24; }
+    .green { background: #34d399; }
+
+    .content {
+      padding: 24px 28px 30px;
+      font-size: 18px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    .label {
+      color: #93c5fd;
+    }
+
+    .ok {
+      color: #86efac;
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <div class="bar">
+      <span class="dot red"></span>
+      <span class="dot yellow"></span>
+      <span class="dot green"></span>
+      <span>FitFindr Milestone 5 Failure Mode Check</span>
+    </div>
+    <div class="content"><span class="label">$ ./.venv/bin/python -c "from agent import run_agent; from utils.data_loader import get_example_wardrobe; session = run_agent('designer ballgown size XXS under \$5', get_example_wardrobe()); print(session['error']); print('fit_card=', session['fit_card']); print('selected_item=', session['selected_item'])"</span>
+
+No listings found for 'designer ballgown' with size XXS and under $5. Try a broader style keyword or remove a filter.
+fit_card= None
+selected_item= None
+
+<span class="ok">Result: the agent stopped early and did not call downstream tools.</span></div>
+  </div>
+</body>
+</html>
