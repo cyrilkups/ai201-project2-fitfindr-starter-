@@ -56,7 +56,8 @@ If search fails, the sequence changes. The agent tries one relaxed search when t
 
 ### `search_listings(description: str, size: Optional[str], max_price: Optional[float]) -> list[dict]`
 
-This tool is the retrieval step. Its job is to take a user request and turn it into actual candidate items from the dataset.
+Purpose:
+- retrieve matching secondhand listings from the mock dataset so the rest of the agent has a concrete item to reason about
 
 Inputs:
 - `description: str` — the core search phrase, such as `"vintage graphic tee"` or `"90s track jacket"`.
@@ -64,11 +65,7 @@ Inputs:
 - `max_price: Optional[float]` — an optional maximum budget in dollars.
 
 Output:
-- a ranked `list[dict]` of listings, where each listing contains `id`, `title`, `description`, `category`, `style_tags`, `size`, `condition`, `price`, `colors`, `brand`, and `platform`.
-
-What it contributes:
-- it gives the rest of the agent something concrete to reason over
-- it determines whether the run continues normally, retries with relaxed filters, or exits early
+- a ranked `list[dict]` of listings, where each listing contains `id`, `title`, `description`, `category`, `style_tags`, `size`, `condition`, `price`, `colors`, `brand`, and `platform`
 
 Failure handling:
 - when nothing matches, it returns `[]`
@@ -76,7 +73,8 @@ Failure handling:
 
 ### `suggest_outfit(new_item: dict, wardrobe: dict) -> str`
 
-This is the styling step. It takes the chosen item and tries to make it feel wearable in the context of the user's wardrobe instead of treating it like a standalone product.
+Purpose:
+- turn the selected listing into styling advice that either uses specific wardrobe pieces or, if necessary, gives general fallback advice
 
 Inputs:
 - `new_item: dict` — the selected listing chosen from search results
@@ -85,18 +83,14 @@ Inputs:
 Output:
 - a non-empty string with outfit advice
 
-What it contributes:
-- turns a search result into something personal
-- references actual wardrobe pieces when possible
-- falls back to general styling guidance when the wardrobe is empty
-
 Failure handling:
 - if the wardrobe is empty, it still returns usable advice
 - if the Groq call fails, it falls back to deterministic styling text
 
 ### `create_fit_card(outfit: str, new_item: dict) -> str`
 
-This is the finishing step. It takes the item plus the styling recommendation and turns them into a short caption that feels like something a person would actually post.
+Purpose:
+- convert the outfit suggestion plus selected item into a short shareable caption for the final UI panel
 
 Inputs:
 - `outfit: str` — the outfit text returned by `suggest_outfit`
@@ -104,10 +98,6 @@ Inputs:
 
 Output:
 - a non-empty caption string that mentions the item, price, platform, and overall vibe
-
-What it contributes:
-- makes the final output feel complete and presentable
-- gives the interface a third panel that reads differently from the outfit advice
 
 Failure handling:
 - if the outfit string is missing, it returns a descriptive fallback message
@@ -121,25 +111,16 @@ The logic is:
 
 1. Start a fresh `session` dictionary.
 2. Reject empty user input immediately.
-3. Parse the raw query into:
-   - `description`
-   - `size`
-   - `max_price`
-   - `filters_relaxed`
+3. Parse the raw query into `description`, `size`, `max_price`, and `filters_relaxed`.
 4. Call `search_listings(description, size, max_price)`.
-5. If search succeeds:
-   - store the results
-   - choose `results[0]` as `selected_item`
-   - pass that exact object into `suggest_outfit`
-   - pass the exact resulting outfit string into `create_fit_card`
-6. If search fails and the query had filters:
-   - retry once using only the description
-   - mark `filters_relaxed = True` if that retry succeeds
-7. If search still fails:
-   - set `session["error"]`
-   - return early
-   - do not call the styling tool
-   - do not call the caption tool
+5. If the first search returns results, store them, choose `results[0]` as `selected_item`, and continue.
+6. If the first search returns `[]` and the query included a size or price filter, retry once with `search_listings(description, size=None, max_price=None)`.
+7. If the retry succeeds, replace `search_results` with the relaxed results and set `filters_relaxed = True`.
+8. If the retry also returns `[]`, set `session["error"]` and return immediately.
+9. If the very first search returned `[]` and there were no filters to relax, set `session["error"]` and return immediately.
+10. Only after a real `selected_item` exists does the agent call `suggest_outfit(selected_item, wardrobe)`.
+11. The returned outfit string is stored in `session["outfit_suggestion"]` and then passed directly into `create_fit_card(outfit_suggestion, selected_item)`.
+12. The returned caption is stored in `session["fit_card"]`, and the completed session is returned to the UI.
 
 That early-stop behavior is important. It is what makes the agent feel deliberate instead of scripted.
 
@@ -165,17 +146,25 @@ session = {
 }
 ```
 
-Why this works well:
-- the selected listing is stored once and reused downstream
-- the outfit text is stored once and reused downstream
-- the UI only reads the final state instead of recomputing anything
-- failure is explicit because `error` is part of the same object
+When each field is stored:
+- `query` and `wardrobe` are stored at the start of `run_agent()`
+- `parsed` is stored immediately after query parsing
+- `search_results` is stored after each search attempt, including the relaxed retry path
+- `selected_item` is stored once the agent chooses `search_results[0]`
+- `outfit_suggestion` is stored immediately after `suggest_outfit()` returns
+- `fit_card` is stored immediately after `create_fit_card()` returns
+- `error` is stored only when the run should stop early
+
+How state gets passed between tools:
+- `session["selected_item"]` is the exact dict passed into `suggest_outfit()`
+- `session["outfit_suggestion"]` is the exact string passed into `create_fit_card()`
+- the UI reads the final session object instead of recalculating anything
 
 I also tested this directly. The same `selected_item` object reaches both downstream tools, and the exact `outfit_suggestion` stored in session is the string that becomes the input to `create_fit_card`.
 
 ## Error Handling
 
-### Search failure
+### `search_listings`
 
 Concrete example:
 - query: `"designer ballgown size XXS under $5"`
@@ -193,24 +182,24 @@ State at the end:
 
 The important part is what does not happen: the agent does not continue into styling or caption generation.
 
-### Empty wardrobe
+### `suggest_outfit`
 
 Concrete example:
 - call `suggest_outfit(listing, get_empty_wardrobe())`
 
-Response shape:
-- general styling guidance such as pairing the item with relaxed denim, neutral bottoms, or simple shoes
+Tested response:
+- `"Use Graphic Tee — 2003 Tour Bootleg Style as the focal point and ground it with relaxed denim or straight-leg trousers in a neutral wash..."`
 
 Why that matters:
 - the agent still returns something useful even when it cannot reference named wardrobe pieces
 
-### Empty outfit string
+### `create_fit_card`
 
 Concrete example:
 - call `create_fit_card("", listing)`
 
 Response:
-- `"I couldn't generate a full fit card because the outfit details were missing..."`
+- `"I couldn't generate a full fit card because the outfit details were missing. Graphic Tee — 2003 Tour Bootleg Style is still a strong secondhand pickup on its own."`
 
 Why that matters:
 - the UI receives a readable fallback instead of a traceback or silent empty output
@@ -223,15 +212,16 @@ I used AI as a drafting and acceleration tool, but not as something I trusted bl
 
 ### Example 1: Tool implementation
 
-What I gave the AI:
+What I directed the AI to do:
 - the `Tool 1`, `Tool 2`, and `Tool 3` sections from `planning.md`
 - the intended failure behaviors
 - the existing function signatures from `tools.py`
+- implement the three tool bodies so the signatures and failure modes matched the written spec
 
 What it gave back:
 - first-pass implementations for retrieval, styling, and caption generation
 
-What I changed before keeping it:
+What I revised or overrode before keeping it:
 - made imports safe when `groq` or `dotenv` were missing
 - added deterministic fallbacks for both LLM-backed tools
 - corrected SDK assumptions so the Groq client calls matched the real client
@@ -239,34 +229,32 @@ What I changed before keeping it:
 
 ### Example 2: Planning loop and state flow
 
-What I gave the AI:
+What I directed the AI to do:
 - the `Planning Loop`, `State Management`, and `Architecture` sections from `planning.md`
 - the Mermaid diagram showing the retry branch and early-stop branch
+- draft `run_agent()` so that it branched on search failure instead of always running every tool
 
 What it gave back:
 - a draft `run_agent()` structure
 
-What I changed before keeping it:
+What I revised or overrode before keeping it:
 - made retry conditional only when size or price filters were present
 - ensured the no-results path returns before any downstream tool calls
 - added tests that verify actual state passing, not just surface-level output
 
 ## Spec Reflection
 
-The implementation stayed pretty close to the original plan, which was a good sign that the spec was specific enough. The biggest surprises were environmental rather than architectural.
+One way the spec helped:
+- writing the planning loop and session schema in `planning.md` first made the actual implementation in `run_agent()` much easier, because I already knew exactly what had to be stored after each step and where the early-return branches belonged
 
-What changed in practice:
-- the original Gradio requirement was too new for the Python 3.9 venv in this repo
-- Gradio also needed a compatible `huggingface_hub` version to import cleanly
-- local port conflicts meant I verified the interface on `http://127.0.0.1:8080` instead of assuming `7860`
+One way implementation diverged from the spec, and why:
+- I originally expected to verify the interface on the default Gradio port and treat the UI setup as straightforward, but in practice I had to work around environment issues: the Python 3.9 venv needed compatible package versions, and local port conflicts meant I verified the app on `http://127.0.0.1:8080` instead of assuming `7860`
 
-What stayed true to the plan:
+What stayed aligned with the plan:
 - one real decision point after search
 - one relaxed retry path
 - one explicit early-stop path on repeated search failure
 - session-based state flow across every step
-
-If I kept going, I would improve the query parsing and make the "closest match" ranking a little more nuanced so that the fallback search could distinguish style similarity from size similarity more gracefully.
 
 ## End-to-End Verification
 
